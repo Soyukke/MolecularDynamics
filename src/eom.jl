@@ -3,7 +3,7 @@ using LinearAlgebra
 using Base.Iterators
 using Base.Threads
 using Combinatorics
-
+import Base.copy
 const INIT_MAXWELL = "maxwell"
 const INIT_UNIFORM = "random"
 
@@ -31,6 +31,28 @@ mutable struct Geometry
     vflist::Array{Array{Int64, 1}, 1} # 粒子のインデックスと距離を保存する
     vf0::Array{Float64, 2}
     vf::Array{Float64, 2}
+end
+
+function copy(g::Geometry)
+    return Geometry(
+        g.nstep,
+        g.Δt,
+        g.cell,
+        g.natom,
+        g.vnatom,
+        g.ntype,
+        g.vtype,
+        copy(g.vm),
+        copy(g.vr),
+        copy(g.vv),
+        g.R1,
+        g.R2,
+        g.R,
+        g.Life,
+        copy(g.vflist),
+        copy(g.vf0),
+        copy(g.vf),
+    )
 end
 
 """
@@ -119,8 +141,10 @@ function make_geometry()
     nstep = 1000
     Δt = 1e-2
     cell = [10, 10, 10]
-    natom = 50
-    vnatom = [15, 5]
+    atomnumbers = [1, 6]
+    # 各原子数
+    vnatom = [6, 12]
+    natom = sum(vnatom)
     ntype = 2
     # [1, 1, 1, 1,  1,  1,  1,  1,  ... 2,  2,  2,  2,  2]
     vtype = vcat(map(x -> x[1]*ones(Int64, x[2]), enumerate(vnatom))...)
@@ -136,7 +160,7 @@ function make_geometry()
     for i in 1:natom push!(vlist, []) end
     vf0 = zeros(3, natom)
     vf = zeros(3, natom)
-    return Geometry(nstep, Δt, cell, natom, vnatom, ntype, vtype, vm, vr, vv, R1, R2, R, L, vlist, vf0, vf)
+    return Geometry(nstep, Δt, cell, natom, atomnumbers, ntype, vtype, vm, vr, vv, R1, R2, R, L, vlist, vf0, vf)
 end
 
 """
@@ -173,14 +197,17 @@ end
 
 function main()
     geom = make_geometry()
-    make_force_list(geom)
+    geoms = Geometry[geom]
+    make_force_list(copy(geom))
     for i in 1:1000
         step(geom)
+        push!(geoms, copy(geom))
         geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
-        @info geom.Life, geom.R2
+        # @info geom.Life, geom.R2
         if geom.Life > geom.R2
             make_force_list(geom)
             geom.Life = 0
         end
     end
+    return geoms
 end
