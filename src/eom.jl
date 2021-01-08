@@ -3,6 +3,7 @@ using LinearAlgebra
 using Base.Iterators
 using Base.Threads
 using Combinatorics
+using Random
 import Base.copy
 const INIT_MAXWELL = "maxwell"
 const INIT_UNIFORM = "random"
@@ -33,6 +34,11 @@ mutable struct Geometry
     vf::Array{Float64, 2}
 end
 
+"""
+copy(g::Geometry)
+
+copy `g` Geometry
+"""
 function copy(g::Geometry)
     return Geometry(
         g.nstep,
@@ -87,13 +93,17 @@ function force(r)
     return -4ε*(a - b)
 end
 
-function init_vector(size_, init_type=INIT_MAXWELL)
+"""
+init_vector
+
+Initialize vector by distributions.
+"""
+function init_vector(shape::Tuple, init_type=INIT_MAXWELL)
     #= init vector value =#
-    # .をつけなければ代入にならない
     if init_type == INIT_MAXWELL
-        return randn(size_...)
+        return randn(shape...)
     elseif init_type == INIT_UNIFORM
-        return rand(size_...)
+        return rand(shape...)
     end
 end
 
@@ -123,6 +133,7 @@ function make_force_list(geometry::Geometry)
     R = geometry.R
     # 原子ペアの全組み合わせ
     pairs = combinations(1:natom, 2)
+    # TODO parallelable
     for (i, j) in pairs
         r = norm(vr[:, i] - vr[:, j])
         if r < R
