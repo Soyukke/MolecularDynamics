@@ -32,6 +32,7 @@ mutable struct Geometry
     vflist::Array{Array{Int64, 1}, 1} # 粒子のインデックスと距離を保存する
     vf0::Array{Float64, 2}
     vf::Array{Float64, 2}
+    isperiodic::Vector{Bool}
 end
 
 """
@@ -58,6 +59,7 @@ function copy(g::Geometry)
         copy(g.vflist),
         copy(g.vf0),
         copy(g.vf),
+        copy(g.isperiodic)
     )
 end
 
@@ -143,11 +145,49 @@ function make_force_list(geometry::Geometry)
 end
 
 """
+make_force_list_expand
+
+
+周期境界ありgeometryのforcelistを再計算する
+一定距離以内の原子をmemoryすることで計算量を減らす
+
+粒子番号だけでは情報が足りない
+粒子番号, (IMAGE_X, IMAGE_Y, IMAGE_Z)
+i, (+1, -1, +1)
+"""
+function make_force_list_expand(geometry::Geometry)
+    # periodically
+    isloopx, isloopy, isloopz = geometry.isperiodic
+
+    natom = geometry.natom
+    vr = geometry.vr
+    
+    # 周期境界イメージのパターン
+    # for (IMAGE_X, IMAGE_Y, IMAGE_Z) in collect(Iterators.product(-1:1, -1:1, -1:1))
+    # end
+
+    # いったん初期化
+    geometry.vflist = Array{Array{Int64, 1}, 1}[]
+    vflist = geometry.vflist
+    for i in 1:natom push!(vflist, []) end
+    R = geometry.R
+    # 原子ペアの全組み合わせ
+    pairs = combinations(1:natom, 2)
+    # TODO parallelable
+    for (i, j) in pairs
+        r = norm(vr[:, i] - vr[:, j])
+        if r < R
+            push!(vflist[i], j)
+        end
+    end
+end
+
+"""
 make_geometry
 
 make example geometry
 """
-function make_geometry()
+function make_geometry(;isperiodic=false)
     # ジオメトリ作成
     nstep = 1000
     Δt = 1e-2
@@ -171,7 +211,19 @@ function make_geometry()
     for i in 1:natom push!(vlist, []) end
     vf0 = zeros(3, natom)
     vf = zeros(3, natom)
-    return Geometry(nstep, Δt, cell, natom, atomnumbers, ntype, vtype, vm, vr, vv, R1, R2, R, L, vlist, vf0, vf)
+    return Geometry(
+        nstep,
+        Δt,
+        cell,
+        natom,
+        atomnumbers,
+        ntype,
+        vtype,
+        vm, vr, vv,
+        R1, R2, R, L,
+        vlist, vf0, vf,
+        repeat([isperiodic], 3)
+    )
 end
 
 """
@@ -204,6 +256,80 @@ function step(geometry::Geometry)
 
     # calculate vv
     vv .= vv + (Δt^2 ./ 2vm .* (vf0 + vf))
+end
+
+"""
+step
+
+calculate 1 step consider periodically
+"""
+function periodicalstep(geometry::Geometry)
+    # periodically
+    isloopx, isloopy, isloopz = geometry.isperiodic
+    A = Array(Diagonal(geometry.cell))
+    natom = geometry.natom
+    Δt = geometry.Δt
+    vm = geometry.vm
+    vr = geometry.vr
+    vv = geometry.vv
+    vflist = geometry.vflist
+    vf0 = geometry.vf0
+    vf = geometry.vf
+    # calculate step
+    # cartesian coordinate
+    vr .= vr .+ vv*Δt + (Δt^2 ./ 2vm .* vf)
+    # fractional coordinate
+    vrᵦ = fractionalcoords(A, vr)
+    # cartesian coordinate
+    vf0 .= copy(vf)
+    vf .= zeros(3, natom)
+
+    for (i, vj) in enumerate(vflist)
+        for j in vj
+            r_12 = vr[:, i] - vr[:, j]
+            r = norm(r_12)
+            nr_12 = r_12 / r
+            vf[:, i] += force(r)*nr_12
+            vf[:, j] -= force(r)*nr_12
+        end
+    end
+
+    # calculate vv
+    vv .= vv + (Δt^2 ./ 2vm .* (vf0 + vf))
+end
+
+"""
+x̂ : fractional
+x : cartesian
+A : geometry
+x = Ax̂
+"""
+function fractionalcoords(A::Matrix{T}, x::Matrix{T}) where T
+    # Matrix{Float64}(Diagonal(cell))
+    x̂ = inv(A) * x
+    return x̂
+end
+
+function fractionalcoords(A::Matrix{T}, x::Vector{T}) where T
+    # Matrix{Float64}(Diagonal(cell))
+    x̂ = inv(A) * x
+    return x̂
+end
+
+"""
+x̂ : fractional
+x : cartesian
+A : geometry
+x = Ax̂
+"""
+function cartesiancoords(A::Matrix{T}, x̂::Matrix{T}) where T
+    x = A * x̂
+    return x
+end
+
+function cartesiancoords(A::Matrix{T}, x̂::Vector{T}) where T
+    x = A * x̂
+    return x
 end
 
 function main()
