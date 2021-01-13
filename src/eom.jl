@@ -30,6 +30,7 @@ mutable struct Geometry
     R::Float64
     Life::Float64
     vflist::Array{Array{Int64, 1}, 1} # 粒子のインデックスと距離を保存する
+    vflistexpand::Vector{Vector{Tuple{Int64, Tuple{Int64, Int64, Int64}}}} # 距離R以内の粒子のインデックスとイメージインデックスを保存する
     vf0::Array{Float64, 2}
     vf::Array{Float64, 2}
     isperiodic::Vector{Bool}
@@ -57,6 +58,7 @@ function copy(g::Geometry)
         g.R,
         g.Life,
         copy(g.vflist),
+        copy(g.vflistexpand),
         copy(g.vf0),
         copy(g.vf),
         copy(g.isperiodic)
@@ -155,31 +157,42 @@ make_force_list_expand
 粒子番号, (IMAGE_X, IMAGE_Y, IMAGE_Z)
 i, (+1, -1, +1)
 """
-function make_force_list_expand(geometry::Geometry)
+function forcelistexpand(geometry::Geometry)
     # periodically
     isloopx, isloopy, isloopz = geometry.isperiodic
 
     natom = geometry.natom
     vr = geometry.vr
-    
-    # 周期境界イメージのパターン
-    # for (IMAGE_X, IMAGE_Y, IMAGE_Z) in collect(Iterators.product(-1:1, -1:1, -1:1))
-    # end
+
+    # Box Vectors A = [a b c]
+    A = Array(Diagonal(geometry.cell))
+    T = typeof(A).parameters[begin]
+    a, b, c = mapslices(x->[x], A, dims=[1])
+    # shift vector
+    vlmn = collect(Iterators.product(-1:1, -1:1, -1:1))
+    vS = map(vlmn) do (rx, ry, rz)
+        # 周期境界イメージのパターン, jの方だけイメージ分ループする
+        A * T[rx; ry; rz]
+    end
 
     # いったん初期化
     geometry.vflist = Array{Array{Int64, 1}, 1}[]
-    vflist = geometry.vflist
-    for i in 1:natom push!(vflist, []) end
+    vflistexpand = geometry.vflistexpand
+    for i in 1:natom push!(vflistexpand, []) end
     R = geometry.R
     # 原子ペアの全組み合わせ
     pairs = combinations(1:natom, 2)
     # TODO parallelable
     for (i, j) in pairs
-        r = norm(vr[:, i] - vr[:, j])
-        if r < R
-            push!(vflist[i], j)
+        for (lmn, S) in zip(vlmn, vS)
+            vrⱼₛ = vr[:, j] + S
+            r = norm(vr[:, i] - vrⱼₛ)
+            if r < R
+                push!(vflistexpand[i], (j, lmn))
+            end
         end
     end
+    return vflistexpand
 end
 
 """
@@ -208,6 +221,7 @@ function make_geometry(;isperiodic=false)
     R = 8
     L = 0
     vlist = Array{Array{Int64, 1}, 1}[]
+    vlistexpand = Vector{Vector{Tuple{Int64, Tuple{Int64, Int64, Int64}}}}[]
     for i in 1:natom push!(vlist, []) end
     vf0 = zeros(3, natom)
     vf = zeros(3, natom)
@@ -221,7 +235,8 @@ function make_geometry(;isperiodic=false)
         vtype,
         vm, vr, vv,
         R1, R2, R, L,
-        vlist, vf0, vf,
+        vlist, vlistexpand,
+        vf0, vf,
         repeat([isperiodic], 3)
     )
 end
