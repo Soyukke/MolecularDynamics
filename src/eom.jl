@@ -50,18 +50,18 @@ function copy(g::Geometry)
         g.vnatom,
         g.ntype,
         g.vtype,
-        copy(g.vm),
-        copy(g.vr),
-        copy(g.vv),
+        deepcopy(g.vm),
+        deepcopy(g.vr),
+        deepcopy(g.vv),
         g.R1,
         g.R2,
         g.R,
         g.Life,
-        copy(g.vflist),
-        copy(g.vflistexpand),
-        copy(g.vf0),
-        copy(g.vf),
-        copy(g.isperiodic)
+        deepcopy(g.vflist),
+        deepcopy(g.vflistexpand),
+        deepcopy(g.vf0),
+        deepcopy(g.vf),
+        deepcopy(g.isperiodic)
     )
 end
 
@@ -156,6 +156,7 @@ make_force_list_expand
 粒子番号だけでは情報が足りない
 粒子番号, (IMAGE_X, IMAGE_Y, IMAGE_Z)
 i, (+1, -1, +1)
+Tuple{Int64, Int64, Int64} は 原子座標が周期境界で変更した場合に修正する
 """
 function forcelistexpand(geometry::Geometry)
     # periodically
@@ -204,7 +205,7 @@ function make_geometry(;isperiodic=false)
     # ジオメトリ作成
     nstep = 1000
     Δt = 1e-2
-    cell = [10, 10, 10]
+    cell = 20 * [1, 1, 1]
     atomnumbers = [1, 6]
     # 各原子数
     vnatom = [6, 12]
@@ -214,7 +215,11 @@ function make_geometry(;isperiodic=false)
     vtype = vcat(map(x -> x[1]*ones(Int64, x[2]), enumerate(vnatom))...)
     vm = ones(natom)'
     vr = 10*init_vector((3, natom), INIT_UNIFORM)
-    vv = zeros(3, natom)
+    T = typeof(vr).parameters[1]
+    A = Array(Diagonal{T}(cell))
+    vr = modcoords(A, vr)
+    # vv = zeros(3, natom)
+    vv = 10*init_vector((3, natom), INIT_UNIFORM)
     # force
     R1 = 4
     R2 = 4
@@ -287,21 +292,51 @@ function periodicalstep(geometry::Geometry)
     vm = geometry.vm
     vr = geometry.vr
     vv = geometry.vv
-    vflist = geometry.vflist
+    vflistexpand = geometry.vflistexpand
     vf0 = geometry.vf0
     vf = geometry.vf
     # calculate step
     # cartesian coordinate
     vr .= vr .+ vv*Δt + (Δt^2 ./ 2vm .* vf)
+    # printarray(vr)
     # fractional coordinate
     vrᵦ = fractionalcoords(A, vr)
+    T = typeof(vrᵦ).parameters[1]
+
+    # x, y, zで 0 ≤ p < 1 を満たさず， isloopの場合，座標を 0 ≤ p < 1に収まるようにする
+    # rᵦᵢ = vrᵦ[:, i]
+    cnt = 1
+    IS = T[isloopx, isloopy, isloopz]
+    # シフト行列 (3, natom) .* (3, 1)
+    S = - floor.(vrᵦ) .* IS
+    # printarray(S)
+    # S = mapslices(vrᵦ, dims=1) do rᵦ
+    #     # Matrix 
+    #     floor.(vrᵦ)
+    #     # periodicの領域外
+    #     # 座標を丸める
+    #     # -1.3 なら +2
+    #     # 1.3　なら -1
+    #     # 2.3 なら -2
+    #     # floor
+    #     return 
+    # end
+    # シフトして周期境界を適用する
+    vrᵦ += S
+    # printarray(vrᵦ)
+    # printarray(vrᵦ)
+    vr .= cartesiancoords(A, vrᵦ)
+    # TODO forcelistexpandを補正する
     # cartesian coordinate
     vf0 .= copy(vf)
     vf .= zeros(3, natom)
 
-    for (i, vj) in enumerate(vflist)
-        for j in vj
-            r_12 = vr[:, i] - vr[:, j]
+    for (i, (vjlmn)) in enumerate(vflistexpand)
+        for (j, lmn) in vjlmn
+            # shift vector
+            s = Vector{T}([lmn...])
+            # 原子間距離
+            r_12 = vr[:, i] - (vr[:, j] + s)
             r = norm(r_12)
             nr_12 = r_12 / r
             vf[:, i] += force(r)*nr_12
@@ -347,6 +382,17 @@ function cartesiancoords(A::Matrix{T}, x̂::Vector{T}) where T
     return x
 end
 
+"""
+modcoords(A::Matrix{T}, x::Vector{T}) where T
+
+atom position move in the cell
+"""
+function modcoords(A::Matrix{T}, x::Matrix{T}) where T
+    x̂ = fractionalcoords(A, x)
+    x̂ = mod.(x̂, 1)
+    x = cartesiancoords(A, x̂)
+end
+
 function main()
     geom = make_geometry()
     geoms = Geometry[geom]
@@ -358,6 +404,23 @@ function main()
         # @info geom.Life, geom.R2
         if geom.Life > geom.R2
             make_force_list(geom)
+            geom.Life = 0
+        end
+    end
+    return geoms
+end
+
+function main2()
+    geom = make_geometry(isperiodic=true)
+    geoms = Geometry[copy(geom)]
+    forcelistexpand(copy(geom))
+    for i in 1:1000
+        periodicalstep(geom)
+        push!(geoms, copy(geom))
+        geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
+        # @info geom.Life, geom.R2
+        if geom.Life > geom.R2
+            forcelistexpand(geom)
             geom.Life = 0
         end
     end
