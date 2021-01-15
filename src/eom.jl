@@ -31,6 +31,7 @@ mutable struct Geometry
     Life::Float64
     vflist::Array{Array{Int64, 1}, 1} # 粒子のインデックスと距離を保存する
     vflistexpand::Vector{Vector{Tuple{Int64, Tuple{Int64, Int64, Int64}}}} # 距離R以内の粒子のインデックスとイメージインデックスを保存する
+    S::Matrix{Float64} # vflistexpandを更新してからの原子シフト
     vf0::Array{Float64, 2}
     vf::Array{Float64, 2}
     isperiodic::Vector{Bool}
@@ -50,18 +51,19 @@ function copy(g::Geometry)
         g.vnatom,
         g.ntype,
         g.vtype,
-        deepcopy(g.vm),
-        deepcopy(g.vr),
-        deepcopy(g.vv),
+        copy(g.vm),
+        copy(g.vr),
+        copy(g.vv),
         g.R1,
         g.R2,
         g.R,
         g.Life,
-        deepcopy(g.vflist),
-        deepcopy(g.vflistexpand),
-        deepcopy(g.vf0),
-        deepcopy(g.vf),
-        deepcopy(g.isperiodic)
+        copy(g.vflist),
+        copy(g.vflistexpand),
+        copy(g.S),
+        copy(g.vf0),
+        copy(g.vf),
+        copy(g.isperiodic)
     )
 end
 
@@ -177,9 +179,9 @@ function forcelistexpand(geometry::Geometry)
     end
 
     # いったん初期化
-    geometry.vflist = Array{Array{Int64, 1}, 1}[]
+    geometry.vflistexpand = Vector{Vector{Tuple{Int64, Tuple{Int64, Int64, Int64}}}}()
     vflistexpand = geometry.vflistexpand
-    for i in 1:natom push!(vflistexpand, []) end
+    for i in 1:natom push!(vflistexpand, Vector{Tuple{Int64, Tuple{Int64, Int64, Int64}}}()) end
     R = geometry.R
     # 原子ペアの全組み合わせ
     pairs = combinations(1:natom, 2)
@@ -205,7 +207,7 @@ function make_geometry(;isperiodic=false)
     # ジオメトリ作成
     nstep = 1000
     Δt = 1e-2
-    cell = 20 * [1, 1, 1]
+    cell = 10 * [1, 1, 1]
     atomnumbers = [1, 6]
     # 各原子数
     vnatom = [6, 12]
@@ -219,7 +221,7 @@ function make_geometry(;isperiodic=false)
     A = Array(Diagonal{T}(cell))
     vr = modcoords(A, vr)
     # vv = zeros(3, natom)
-    vv = 10*init_vector((3, natom), INIT_UNIFORM)
+    vv = 0*init_vector((3, natom), INIT_UNIFORM)
     # force
     R1 = 4
     R2 = 4
@@ -227,6 +229,7 @@ function make_geometry(;isperiodic=false)
     L = 0
     vlist = Array{Array{Int64, 1}, 1}[]
     vlistexpand = Vector{Vector{Tuple{Int64, Tuple{Int64, Int64, Int64}}}}[]
+    S = zeros(size(vr))
     for i in 1:natom push!(vlist, []) end
     vf0 = zeros(3, natom)
     vf = zeros(3, natom)
@@ -240,7 +243,7 @@ function make_geometry(;isperiodic=false)
         vtype,
         vm, vr, vv,
         R1, R2, R, L,
-        vlist, vlistexpand,
+        vlist, vlistexpand, S,
         vf0, vf,
         repeat([isperiodic], 3)
     )
@@ -331,13 +334,25 @@ function periodicalstep(geometry::Geometry)
     vf0 .= copy(vf)
     vf .= zeros(3, natom)
 
+    # シフト行列を加算する
+    geometry.S += S
+
     for (i, (vjlmn)) in enumerate(vflistexpand)
         for (j, lmn) in vjlmn
             # shift vector
             s = Vector{T}([lmn...])
-            # 原子間距離
-            r_12 = vr[:, i] - (vr[:, j] + s)
+            # 原子間距離 シフト分の距離を戻す
+            # r_12 = Float64[1.0, 1.0, 1.0]
+            r_12 = 
+            (vr[:, i] - cartesiancoords(A, geometry.S[:, i])) -
+            (vr[:, j] - cartesiancoords(A, geometry.S[:, j]) + s)
             r = norm(r_12)
+            if r ≤ 0.8
+                # 0.043233222584919
+                println("r: $r, $i, $j")
+                # println((vr[:, i] - cartesiancoords(A, geometry.S[:, i])))
+                # println(vr[:, j] - cartesiancoords(A, geometry.S[:, j]) + s)
+            end
             nr_12 = r_12 / r
             vf[:, i] += force(r)*nr_12
             vf[:, j] -= force(r)*nr_12
@@ -346,6 +361,11 @@ function periodicalstep(geometry::Geometry)
 
     # calculate vv
     vv .= vv + (Δt^2 ./ 2vm .* (vf0 + vf))
+    # println("vr2: ", vr[:, 2])
+    # println("vr17:", vr[:, 17])
+    # println("r: ", norm(vr[:, 2] - vr[:, 17]))
+    # println("vv2: ", vv[:, 2])
+    # println("vv17:", vv[:, 17])
 end
 
 """
@@ -410,18 +430,23 @@ function main()
     return geoms
 end
 
-function main2()
+function main2(;logstep=20)
+    Random.seed!(1)
     geom = make_geometry(isperiodic=true)
+    forcelistexpand(geom)
     geoms = Geometry[copy(geom)]
-    forcelistexpand(copy(geom))
-    for i in 1:1000
+    for i in 1:100000
         periodicalstep(geom)
-        push!(geoms, copy(geom))
         geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
         # @info geom.Life, geom.R2
         if geom.Life > geom.R2
             forcelistexpand(geom)
+            # リセットする
+            geom.S = zeros(size(geom.vr))
             geom.Life = 0
+        end
+        if i % logstep == 0
+            push!(geoms, copy(geom))
         end
     end
     return geoms
