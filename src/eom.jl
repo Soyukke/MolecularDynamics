@@ -187,7 +187,7 @@ function forcelistexpand(geometry::Geometry)
     pairs = combinations(1:natom, 2)
     # TODO parallelable
     for (i, j) in pairs
-        for (lmn, S) in zip(vlmn, vS)
+        @threads for (lmn, S) in collect(zip(vlmn, vS))
             vrⱼₛ = vr[:, j] + S
             r = norm(vr[:, i] - vrⱼₛ)
             if r < R
@@ -329,7 +329,6 @@ function periodicalstep(geometry::Geometry)
     # printarray(vrᵦ)
     # printarray(vrᵦ)
     vr .= cartesiancoords(A, vrᵦ)
-    # TODO forcelistexpandを補正する
     # cartesian coordinate
     vf0 .= copy(vf)
     vf .= zeros(3, natom)
@@ -338,7 +337,7 @@ function periodicalstep(geometry::Geometry)
     geometry.S += S
 
     for (i, (vjlmn)) in enumerate(vflistexpand)
-        for (j, lmn) in vjlmn
+        @threads for (j, lmn) in vjlmn
             # shift vector
             s = Vector{T}([lmn...])
             # 原子間距離 シフト分の距離を戻す
@@ -361,11 +360,6 @@ function periodicalstep(geometry::Geometry)
 
     # calculate vv
     vv .= vv + (Δt^2 ./ 2vm .* (vf0 + vf))
-    # println("vr2: ", vr[:, 2])
-    # println("vr17:", vr[:, 17])
-    # println("r: ", norm(vr[:, 2] - vr[:, 17]))
-    # println("vv2: ", vv[:, 2])
-    # println("vv17:", vv[:, 17])
 end
 
 """
@@ -435,7 +429,7 @@ function main2(;logstep=20)
     geom = make_geometry(isperiodic=true)
     forcelistexpand(geom)
     geoms = Geometry[copy(geom)]
-    for i in 1:100000
+    for i in 1:10000
         periodicalstep(geom)
         geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
         # @info geom.Life, geom.R2
