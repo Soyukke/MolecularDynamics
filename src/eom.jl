@@ -35,6 +35,7 @@ mutable struct Geometry
     vf0::Array{Float64, 2}
     vf::Array{Float64, 2}
     isperiodic::Vector{Bool}
+    forcemap::ForceMap
 end
 
 """
@@ -63,7 +64,8 @@ function copy(g::Geometry)
         copy(g.S),
         copy(g.vf0),
         copy(g.vf),
-        copy(g.isperiodic)
+        copy(g.isperiodic),
+        g.forcemap
     )
 end
 
@@ -209,12 +211,23 @@ function make_geometry(;isperiodic=false)
     Δt = 1e-2
     cell = 10 * [1, 1, 1]
     atomnumbers = [1, 6]
+
+    lj = LennardJones()
+    ff = generalforcefunction(forcefunc(lj))
+    forcemap = ForceMap(
+        Dict(
+            Pair(1, 1) => ff,
+            Pair(1, 6) => ff,
+            Pair(6, 6) => ff
+        )
+    )
+
     # 各原子数
     vnatom = [6, 12]
     natom = sum(vnatom)
     ntype = 2
     # [1, 1, 1, 1,  1,  1,  1,  1,  ... 2,  2,  2,  2,  2]
-    vtype = vcat(map(x -> x[1]*ones(Int64, x[2]), enumerate(vnatom))...)
+    vtype = vcat(map(x -> atomnumbers[x[1]]*ones(Int64, x[2]), enumerate(vnatom))...)
     vm = ones(natom)'
     vr = 10*init_vector((3, natom), INIT_UNIFORM)
     T = typeof(vr).parameters[1]
@@ -245,7 +258,8 @@ function make_geometry(;isperiodic=false)
         R1, R2, R, L,
         vlist, vlistexpand, S,
         vf0, vf,
-        repeat([isperiodic], 3)
+        repeat([isperiodic], 3),
+        forcemap
     )
 end
 
@@ -342,6 +356,8 @@ function periodicalstep(geometry::Geometry)
             s = Vector{T}([lmn...])
             # 原子間距離 シフト分の距離を戻す
             # r_12 = Float64[1.0, 1.0, 1.0]
+            tᵢ = geometry.vtype[i]
+            tⱼ = geometry.vtype[j]
             r_12 = 
             (vr[:, i] - cartesiancoords(A, geometry.S[:, i])) -
             (vr[:, j] - cartesiancoords(A, geometry.S[:, j]) + s)
@@ -353,8 +369,10 @@ function periodicalstep(geometry::Geometry)
                 # println(vr[:, j] - cartesiancoords(A, geometry.S[:, j]) + s)
             end
             nr_12 = r_12 / r
-            vf[:, i] += force(r)*nr_12
-            vf[:, j] -= force(r)*nr_12
+            force = geometry.forcemap(tᵢ, tⱼ)
+            fvec = [x for x in force(r_12...)]
+            vf[:, i] += fvec
+            vf[:, j] -= fvec
         end
     end
 
@@ -429,7 +447,7 @@ function main2(;logstep=20)
     geom = make_geometry(isperiodic=true)
     forcelistexpand(geom)
     geoms = Geometry[copy(geom)]
-    for i in 1:10000
+    for i in 1:1000
         periodicalstep(geom)
         geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
         # @info geom.Life, geom.R2

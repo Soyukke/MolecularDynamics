@@ -12,7 +12,7 @@ function xyzstring(g::Geometry)
     text = "$(g.natom)\n"
     text *= "MolecularDynamics.jl\n"
     for (index, typeindex) in enumerate(g.vtype)
-        atomnumber = g.vnatom[typeindex]
+        atomnumber = typeindex
         atom = atoms[atomnumber]
         x, y, z = g.vr[:, index]
         text *= @sprintf("%s % 2.5f % 2.5f % 2.5f\n", atom, x, y, z)
