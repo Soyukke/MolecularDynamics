@@ -15,16 +15,31 @@ end
 
 """
 Calculate force function by potential function
+`p` is x, y, z potential function
 """
 function forcefunc(p::T) where T <: AbstractPotential
     pot = potential(p)
-    return force(x, y, z) = gradient(x, y, z) do x₁, y₁, z₁
-        - pot(x₁, y₁, z₁)
-    end
+    return force(x, y, z) =
+    tuple2vec(
+        gradient(x, y, z) do x₁, y₁, z₁
+            - pot(x₁, y₁, z₁)
+        end
+    )
+end
+
+"""
+tuple2vec(t::Tuple{T,T,T}) where T
+
+# Examples
+`(2, 1, 3)` -> `[2, 1, 3]`
+"""
+function tuple2vec(t::Tuple{T,T,T}) where T
+    return T[t...]
 end
 
 """
 Atomic pair force function
+For create force settings
 """
 struct ForceMap
     # {atomic type, atomic type} => ForcuFunction

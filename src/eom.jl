@@ -15,6 +15,7 @@ end
 
 mutable struct Geometry
     nstep::Int64
+    step::Int64
     Δt::Float64 # time step
     cell::Array{Float64, 1} # x, y, z
     natom::Int64 # number of particles
@@ -46,6 +47,7 @@ copy `g` Geometry
 function copy(g::Geometry)
     return Geometry(
         g.nstep,
+        g.step,
         g.Δt,
         g.cell,
         g.natom,
@@ -248,6 +250,7 @@ function make_geometry(;isperiodic=false)
     vf = zeros(3, natom)
     return Geometry(
         nstep,
+        1,
         Δt,
         cell,
         natom,
@@ -301,6 +304,7 @@ step
 calculate 1 step consider periodically
 """
 function periodicalstep(geometry::Geometry)
+    geometry.step += 1
     # periodically
     isloopx, isloopy, isloopz = geometry.isperiodic
     A = Array(Diagonal(geometry.cell))
@@ -362,15 +366,10 @@ function periodicalstep(geometry::Geometry)
             (vr[:, i] - cartesiancoords(A, geometry.S[:, i])) -
             (vr[:, j] - cartesiancoords(A, geometry.S[:, j]) + s)
             r = norm(r_12)
-            if r ≤ 0.8
-                # 0.043233222584919
-                println("r: $r, $i, $j")
-                # println((vr[:, i] - cartesiancoords(A, geometry.S[:, i])))
-                # println(vr[:, j] - cartesiancoords(A, geometry.S[:, j]) + s)
-            end
+
             nr_12 = r_12 / r
             force = geometry.forcemap(tᵢ, tⱼ)
-            fvec = [x for x in force(r_12...)]
+            fvec = force(r_12...)
             vf[:, i] += fvec
             vf[:, j] -= fvec
         end
@@ -378,6 +377,16 @@ function periodicalstep(geometry::Geometry)
 
     # calculate vv
     vv .= vv + (Δt^2 ./ 2vm .* (vf0 + vf))
+
+    # Decrease Life of forcelistexpand
+    geometry.Life += maximum(mapslices(norm, geometry.vr, dims=1)) * geometry.Δt
+    if geometry.R2 < geometry.Life
+        # @info "Recalculate forcelistexpand", geometry.step, geometry.Life
+        forcelistexpand(geometry)
+        # Reset Life and Shift-matrix
+        geometry.S = zeros(size(geometry.vr))
+        geometry.Life = 0
+    end
 end
 
 """
@@ -425,38 +434,13 @@ function modcoords(A::Matrix{T}, x::Matrix{T}) where T
     x = cartesiancoords(A, x̂)
 end
 
-function main()
-    geom = make_geometry()
-    geoms = Geometry[geom]
-    make_force_list(copy(geom))
-    for i in 1:1000
-        step(geom)
-        push!(geoms, copy(geom))
-        geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
-        # @info geom.Life, geom.R2
-        if geom.Life > geom.R2
-            make_force_list(geom)
-            geom.Life = 0
-        end
-    end
-    return geoms
-end
-
-function main2(;logstep=20)
+function main(;logstep=20, isperiodic=true)
     Random.seed!(1)
-    geom = make_geometry(isperiodic=true)
+    geom = make_geometry(isperiodic=isperiodic)
     forcelistexpand(geom)
     geoms = Geometry[copy(geom)]
     for i in 1:1000
         periodicalstep(geom)
-        geom.Life += max(mapslices(norm, geom.vr, dims=1)...) * geom.Δt
-        # @info geom.Life, geom.R2
-        if geom.Life > geom.R2
-            forcelistexpand(geom)
-            # リセットする
-            geom.S = zeros(size(geom.vr))
-            geom.Life = 0
-        end
         if i % logstep == 0
             push!(geoms, copy(geom))
         end
