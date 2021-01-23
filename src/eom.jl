@@ -5,8 +5,6 @@ using Base.Threads
 using Combinatorics
 using Random
 import Base.copy
-const INIT_MAXWELL = "maxwell"
-const INIT_UNIFORM = "random"
 
 function printarray(x)
     show(stdout, "text/plain", x)
@@ -101,20 +99,6 @@ function force(r)
     b = -6*x^7 / σ
     a = -12x^13 / σ
     return -4ε*(a - b)
-end
-
-"""
-init_vector
-
-Initialize vector by distributions.
-"""
-function init_vector(shape::Tuple, init_type=INIT_MAXWELL)
-    #= init vector value =#
-    if init_type == INIT_MAXWELL
-        return randn(shape...)
-    elseif init_type == INIT_UNIFORM
-        return rand(shape...)
-    end
 end
 
 function sample2hist(vx::Array{Float64, 1}, dt::Float64)
@@ -231,12 +215,12 @@ function make_geometry(;isperiodic=false)
     # [1, 1, 1, 1,  1,  1,  1,  1,  ... 2,  2,  2,  2,  2]
     vtype = vcat(map(x -> atomnumbers[x[1]]*ones(Int64, x[2]), enumerate(vnatom))...)
     vm = ones(natom)'
-    vr = 10*init_vector((3, natom), INIT_UNIFORM)
+    vr = 10*init_vector((3, natom), DISTRIBUTE_UNIFORM)
     T = typeof(vr).parameters[1]
     A = Array(Diagonal{T}(cell))
     vr = modcoords(A, vr)
     # vv = zeros(3, natom)
-    vv = 0*init_vector((3, natom), INIT_UNIFORM)
+    vv = 0*init_vector((3, natom), DISTRIBUTE_UNIFORM)
     # force
     R1 = 4
     R2 = 4
@@ -434,8 +418,8 @@ function modcoords(A::Matrix{T}, x::Matrix{T}) where T
     x = cartesiancoords(A, x̂)
 end
 
-function main(;logstep=20, isperiodic=true)
-    Random.seed!(1)
+function main(;logstep=20, isperiodic=true, seed=1)
+    Random.seed!(seed)
     geom = make_geometry(isperiodic=isperiodic)
     forcelistexpand(geom)
     geoms = Geometry[copy(geom)]

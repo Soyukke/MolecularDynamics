@@ -2,6 +2,7 @@ module MolecularDynamics
 
 using Zygote
 
+include("initializer.jl")
 include("potential.jl")
 include("force.jl")
 include("eom.jl")
